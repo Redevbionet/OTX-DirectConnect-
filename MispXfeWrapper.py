@@ -5,7 +5,7 @@ import json
 sys.path.append("./")
 import iprep_conf as _IC
 
-INIT_MISPurl = "http:192.168.56.50"
+INIT_MISPurl = "http:223.207.237.216"
 INIT_MISPauthkey = ""
 INIT_XFEauthkey = _IC.xfex_cred
 INIT_XFEcollid = ""
@@ -34,4 +34,5 @@ def moveall():
 		Create_Stix_for(my_urlextension)
 		for line in data.read():
 					
+
 
