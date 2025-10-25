@@ -1,1 +1,15 @@
-{"Name":"CTI-Toolbox at github.com"}
+{"Name":"CTI-Toolbox at github.com"},
+
+{
+  "terminal.integrated.profiles.windows": {
+    "Custom Init": {
+      "path": "pwsh.exe",
+      "args": [
+         "-noexit",
+         "-file",
+         "${env:APPDATA}\\PowerShell\\custom-init.ps1"
+      ]
+    }
+  },
+  "terminal.integrated.defaultProfile.windows": "Custom Init"
+}
