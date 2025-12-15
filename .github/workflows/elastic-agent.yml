@@ -1,0 +1,135 @@
+inputs:
+  # Ingest threat intelligence indicators from Alienvault OTX via API: Ingest threat intelligence indicators from AlienVault Open Threat Exchange (OTX) with Elastic Agent using HTTPJSON.
+  - id: ti_otx-httpjson
+    type: httpjson
+    streams:
+      # Alienvault OTX logs: Collect Alienvault OTX logs
+      - id: httpjson-ti_otx.threat
+        data_stream:
+          dataset: ti_otx.threat
+          type: logs
+        config_version: '2'
+        interval: 5m
+        request.method: GET
+        request.tracer.filename: ../../logs/httpjson/http-request-trace-*.ndjson
+        request.tracer.maxbackups: 5
+        request.url: https://otx.alienvault.com/api/v1/indicators/export
+        request.timeout: 30s
+        request.transforms:
+          - set:
+              target: header.Content-Type
+              value: application/json
+          - set:
+              target: header.X-OTX-API-KEY
+              # value: <API_TOKEN> # API Token: The Alienvault OTX API token
+          - set:
+              target: url.params.types
+              # value: <TYPES> # Filter on indicator types: A comma separated list of indicator types to retrieve, example: 'domain,IPv4,hostname,url,FileHash-SHA256'
+          - set:
+              target: url.params.modified_since
+              value: '[[.cursor.timestamp]]'
+              default: '[[ formatDate (now (parseDuration "-400h")) "RFC3339" ]]'
+        response.split:
+          target: body.results
+          keep_parent: true
+        response.pagination:
+          - set:
+              target: url.value
+              value: '[[ .last_response.body.next ]]'
+        cursor:
+          timestamp:
+            value: '[[ formatDate (now (parseDuration "-1h")) "RFC3339" ]]'
+        tags:
+          - preserve_original_event
+          - forwarded
+          - otx-threat
+        publisher_pipeline.disable_host: true
+        # request.proxy_url: <PROXY_URL> # Proxy URL: URL to proxy connections in the form of http\[s\]://<user>:<password>@<server name/ip>:<port>
+  # Ingest threat intelligence indicators from Alienvault OTX via Subscribed Pulses API using CEL input: Ingest threat intelligence indicators from AlienVault Open Threat Exchange (OTX) with Elastic Agent using CEL.
+  - id: ti_otx-cel
+    type: cel
+    streams:
+      # Alienvault OTX Subcribed Pulses: Collect Alienvault OTX Indicators from Subcribed Pulses API
+      - id: cel-ti_otx.pulses_subscribed
+        data_stream:
+          dataset: ti_otx.pulses_subscribed
+          type: logs
+        config_version: 2
+        interval: 5m
+        resource.tracer.filename: ../../logs/cel/http-request-trace-*.ndjson
+        resource.tracer.maxbackups: 5
+        resource.ssl: null
+        resource.timeout: 30s
+        resource.url: https://otx.alienvault.com/api/v1/pulses/subscribed
+        state:
+          want_more: false
+          # api_key: <API_KEY> # API Key: The Alienvault OTX API Key
+        redact:
+          fields:
+            - api_key
+        program: |
+          request("GET", (
+            !state.want_more
+            ?
+              state.url + "?modified_since=" + (
+              (has(state.modified_since) &&  state.modified_since != "")
+              ?
+                state.modified_since
+              :
+                (now() - duration("400h")).format(time_layout.RFC3339)
+              )
+            :
+              state.url
+          )).with({
+            "Header":{
+              "Content-Type": ["application/json"],
+              "X-OTX-API-KEY": [state.api_key],
+            }
+          }).do_request().as(resp, bytes(resp.Body).decode_json().as(body, 
+            has(body.results) && body.results.size() > 0
+            ?
+              (body.results.map(pulse,
+                pulse.indicators.map(ind, 
+                  ind.with({
+                    "count": body.count, 
+                    "prefetch_pulse_ids": body.prefetch_pulse_ids, 
+                    "t": body.t, 
+                    "t2": body.t2, 
+                    "t3": body.t3,
+                    "pulse_raw": [pulse].drop("indicators")[0].encode_json()
+                  }))).flatten().drop_empty().as(res, 
+                    {
+                      "events": res.map(e, {
+                        "message": e.encode_json(),
+                      }),
+                      "url": (
+                        has(body.next) && body.next != null && body.next != ""
+                        ?
+                          body.next
+                        :
+                          state.url.parse_url().as(parsed_url, parsed_url.Scheme + "://" + parsed_url.Host + parsed_url.Path)
+                      ),
+                      "want_more": has(body.next) && body.next != null && body.next != "",
+                      "api_key": state.api_key,
+                      "modified_since": (now() - duration("1h")).format(time_layout.RFC3339)
+                    })
+              )
+            :
+              ({
+                "events": [],
+                "url": state.url.parse_url().as(parsed_url, parsed_url.Scheme + "://" + parsed_url.Host + parsed_url.Path),
+                "want_more": false,
+                "api_key": state.api_key,
+                "modified_since": (now() - duration("1h")).format(time_layout.RFC3339)
+              })
+            ))
+        fields_under_root: true
+        fields:
+          _conf:
+            ioc_expiration_duration: 90d
+        tags:
+          - preserve_original_event
+          - forwarded
+          - otx-pulses_subscribed
+        publisher_pipeline.disable_host: true
+        # resource.proxy_url: <PROXY_URL> # Proxy URL: URL to proxy connections in the form of http[s]://<user>:<password>@<server name/ip>:<port>. Please ensure your username and password are in URL encoded format.
